@@ -14,7 +14,7 @@ Used for `docs/INTEL_ARC_PLAN.md`. Not part of the build.
 | `blake3_ref.py` | BLAKE3 (ANV's `src_hash` is the first 8 bytes, little-endian, of BLAKE3 of the SPIR-V). |
 | `anv_stats.py CACHE_DIR ANV_LOG [PROFILE_LOG]` | Joins `INTEL_DEBUG` shader statistics with the port's cached SPIR-V and a `BB_GPU_PROFILE` block. |
 | `measure_report.py MEASURE.csv [CACHE_DIR]` | Summarizes an `INTEL_MEASURE` CSV (unused so far: `INTEL_MEASURE` crashes ANV on this game). |
-| `fedora-shims/` | Building on Fedora 44: `CMAKE_PREFIX_PATH=$PWD/tools/intel_arc/fedora-shims` (Zydis has no CMake config there). Also needed: `CXXFLAGS="-isystem <Vulkan-Headers v1.4.357>/include -isystem <dir with magic_enum/*.hpp symlinks to /usr/include/magic_enum*.hpp>"`. |
+| `fedora-shims/` | Superseded: `gpu/CMakeLists.txt` now handles Fedora 44 itself (Zydis through pkg-config, magic_enum < 0.9.6 and Vulkan headers without `VK_VALVE_shader_mixed_float_dot_product` downloaded). Kept for building older checkouts: `CMAKE_PREFIX_PATH=$PWD/tools/intel_arc/fedora-shims`. |
 
 C probes: `gcc -O1 -o memprobe memprobe.c -lvulkan`.
-The scripts hard-code this checkout's path and `~/Games/CUSA03173`.
+The scripts find this checkout from their own path (`REPO=` overrides it) and expect the game in `~/Games/CUSA03173`, the dev data in `~/Games/bbport-dev`.
