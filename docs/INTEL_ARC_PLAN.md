@@ -30,7 +30,7 @@ on purpose: ANV's dma-buf mmap is uncached here (CPU reads ~50 MB/s).
 Standalone proof: a small Vulkan probe that replays the port's checks (host import of memfd,
 anonymous and malloc'd memory works into types 1 and 2; dma-buf export works but maps uncached).
 
-### Baseline (fixed build, system Mesa 26.2.5, Central Yharnam save, standing still, uncapped)
+### Baseline (fixed build, system Mesa 26.2.5, the save's spot: an indoor cathedral hall, standing still, uncapped)
 
 `HOLD=45`, `tools/bench.sh` on a copy of the save (`BB_USER_DIR`), all effects on except SSR.
 
@@ -201,3 +201,223 @@ Reading:
   built for width; check what it does and whether it can be widened or moved.
 - Submission gaps are small (0.2 ms/frame in gaps over 0.25 ms): the CPU feeds the GPU fine; this
   is GPU execution time.
+
+### 2026-11-02/03: measurement harness, first A/B results
+
+Harness: one unattended run = a fresh copy of the save, Continue, wait for the level, settle 15 s,
+measure 60 s standing still (or walking: forward, turn, back, turn), per-frame CSV
+(`BB_FRAME_LOG`), and each second the GPU's actual clock, throttle reasons and package
+temperature from sysfs (`/sys/class/drm/card1/device/tile0/gt0/freq0`). A/B runs interleaved
+(A, B, A, B) so drift hits both. The game is found by its own save folder: `tools/restart.sh`
+takes the newest `bb-probe`, which after a shader version change is the short-lived cache
+rebuild child, and then cannot stop the real game.
+
+Conditions for every run below: on mains, platform profile `balanced`, GPU at ~2.0-2.1 GHz
+(of 2.5), throttle reason `pl4` throughout, package 71-77 °C. Native 1680x1048, no upscaler.
+
+| Experiment | FPS (run 1 / run 2) | Median | p99 | Result |
+|---|---|---|---|---|
+| baseline | 44.2 / 44.0 | 22.4-22.6 ms | 41.3-41.6 ms | |
+| `NoContraction` in vertex stages only (step 2) | 44.4 / 44.3 | 22.4 ms | 41.1-41.3 ms | no change (all: 44.1, none: 44.3) |
+| robustness off, `BB_ROBUSTNESS=0` (step 3) | 43.9 / 44.1 | 22.5-22.6 ms | 41.4-41.5 ms | no change |
+| compression off, `INTEL_DEBUG=noccs` | 29.8 / 30.0 | 33.2-33.3 ms | 61.3-61.4 ms | **-32 %**: compression is on and matters |
+| copy shader HLE, `BB_COPY_SHADER_NATIVE=0` | 43.1 / 43.5 | 22.9-23.1 ms | **25.6-25.9 ms** | -1.5 % average, the 16-frame stutter gone |
+
+- **`NoContraction`** (the macOS port's biggest win) does nothing measurable on ANV. Verified
+  that the mode works: 0 of 270 fragment modules and 240 of 272 vertex modules carry it. The Mac
+  gain came from how SPIRV-Cross/Metal compile precise math (an `optnone` call per op); ANV only
+  loses MAD fusion, and these shaders are not ALU-bound. Kept as the default (it matches the Mac
+  port and costs nothing); not worth an upstream PR on Intel numbers.
+- **Robustness** costs nothing measurable here.
+- **Compression (CCS) is active for the port's render targets and is worth a third of the frame
+  rate.** The frame is memory-bandwidth-bound: an iGPU sharing LPDDR5X with the CPU. The
+  image create flags the port uses (`MUTABLE_FORMAT | EXTENDED_USAGE`, storage, no format list)
+  do not change ANV's memory requirements for these images (probe: same size, types 0-2, as a
+  plain render target), and `noccs` shows compression is on today.
+- **The default copy-shader path makes every 16th frame ~40 ms, followed by a ~6 ms one** (178 of
+  ~2,650 frames, 16 frames apart; the pair averages the normal 23 ms: a late flip, not extra
+  work). On screen that is a hitch about 2.7 times a second at 44 FPS. With the CPU-side (HLE)
+  path the pattern disappears (remaining long frames: one per ~5 s, the stats printout itself).
+  Same image (frame dumps: path-to-path difference 5.5-8.3/255 mean, within run-to-run
+  noise of 3.7-9.3 in this animated scene). No recorder syncs in either path: not a CPU wait on
+  the port's side. Upstream made the GPU path the default because the HLE copies once read a
+  stale VRAM mirror; on an integrated GPU there are no VRAM mirrors.
+
+### ANV shader statistics (INTEL_DEBUG, matched to bbport's shader IDs)
+
+`INTEL_DEBUG=vs,fs,cs,gs,tcs,tes MESA_SHADER_CACHE_DISABLE=true`: ANV printed 866 compiles. Its
+`src_hash` is the first 8 bytes (little-endian) of the BLAKE3 hash of the SPIR-V module, so each
+cached module (`<user>/cache/CUSA03173/<pgm>_<perm>.spv`) can be matched: 463 of 604 matched (the
+rest were not compiled in this short run).
+
+- **No register spills in any shader.** ANV compiles this game's shaders cleanly.
+- G-buffer pixel shaders (`ps 1c3953c6`, `bb10e440`, `52738b8a`; 6 targets): SIMD16 only,
+  365-513 instructions, 22-32 sends. Lighting `ps 600f86b0`: SIMD16 and SIMD32, 349 instructions.
+- Several of the heaviest passes are almost empty shaders: `ps 8650418f` (13 instructions,
+  0.48 ms full-screen RGBA16F), `ps f7229091` (9 instructions, 0.44 ms over four 840x524 passes).
+  Those passes are pure bandwidth, consistent with the `noccs` result.
+- The copy shader `cs fefebf9f`: 26-175 instructions, SIMD32, yet 2.2 ms over 42 dispatches: the
+  cost is around the dispatches (barriers, flushes), not in the shader.
+
+Tools: `tools/intel_arc/` (the benchmark harness, the Vulkan probes, BLAKE3, `anv_stats.py`;
+see its README).
+
+### Mesa: `INTEL_MEASURE` crashes ANV on this workload (for a Mesa report)
+
+`INTEL_MEASURE=draw,file=...,start=11900,count=60` (also with a `control=` FIFO, which captured
+nothing) crashes the game when the capture window opens, at the first submission:
+
+```
+Host fault (signal 11) in libvulkan_intel.so+0x454d5, address 0x8
+  _anv_measure_submit+53
+  xe_queue_exec_locked+2228
+  anv_queue_submit+1971
+  vk_queue_submit_final+697
+  vk_queue_submit+117
+  <- Vulkan::Scheduler::QueueSubmit (bbport)
+```
+
+Mesa 26.2.5 (Fedora `mesa-vulkan-drivers-26.2.5-1.fc44`, build ID
+`dccee9c55a9e1c73abbefdb76629ce471f91d7cf`), `xe` kernel driver, Arc B390. Same with one recording
+thread and no submit thread (`BB_VK_RECORD_THREADS=1 BB_ASYNC_SUBMIT=0`), so not a threading
+race in the app. A null structure read at +0x8 in `_anv_measure_submit`: likely a command buffer
+whose measure state was never set up (one begun before the capture window, or reused; Mesa's own
+warnings name reused command buffers and simultaneous-use secondaries as unsupported).
+
+### 2026-11-03: copy path under FSR and walking; frames ahead; empty draws
+
+Same harness and conditions. FPS of two interleaved runs each.
+
+| Experiment | Setting | Baseline | Variant | p99 baseline → variant |
+|---|---|---|---|---|
+| copy shader HLE (`BB_COPY_SHADER_NATIVE=0`) | FSR 3.1 Quality, standing | 58.5 / 59.2 | 56.8 / 56.9 (-3.5 %) | 19.3-19.8 → 20.1-20.2 ms |
+| copy shader HLE | native, **walking** | 45.7 / 46.1 | 45.0 / 45.0 (-1.8 %) | **40.2-40.4 → 25.7-25.9 ms** |
+| `BB_FRAMES_AHEAD=2` | native | 44.3 / 44.0 | 44.1 / 43.7 | 41.4-42.0 → 41.5-41.8 ms (unchanged) |
+| `BB_FRAMES_AHEAD=2` | FSR 3.1 Quality | 59.3 / 59.3 | 59.0 / 58.7 | unchanged |
+| `BB_SKIP_EMPTY_DRAWS=1` | native | 44.2 / 44.0 | 44.1 / 44.2 | unchanged |
+| `BB_SKIP_EMPTY_DRAWS=1` | FSR 3.1 Quality | 58.9 | 59.0 | unchanged |
+
+- The 16-frame stutter shows at native (standing and walking), where the GPU is the limit; at
+  FSR 3.1 Quality the default path has none, and HLE only costs. So HLE is not a default to
+  switch to; the stutter needs its cause found.
+- One more frame of slack for the command processor does not absorb it: the stall is in the GPU
+  work itself, not in how far ahead the CPU runs.
+- The game's depth-decompress draws are already skipped by default; the other empty draws cost
+  nothing measurable here.
+- FSR 3.1 Quality ran at ~59 FPS on 2026-11-02/03 against ~65 on 2026-11-01 (that day's run had
+  no clock logging). All comparisons above are within one session, interleaved.
+
+### 2026-11-03: barriers, CPU power, precise math under FSR
+
+| Experiment | Setting | Baseline | Variant | Result |
+|---|---|---|---|---|
+| copy shader without its barriers (experiment bit 128, unsafe) | native | 44.3 / 44.5 | 44.3 / 44.3 | no change; same 16-frame p99 (41 ms) |
+| `BB_SPIRV_PRECISE=all` (old shaders) vs `vertex` | FSR 3.1 Quality | vertex 58.8 / 59.0 | all 59.1 / 59.1 | no change: the 65 → 59 gap since 2026-11-01 is not this change |
+| draw-preparation workers 4 → 0 (`BB_PREP_WORKERS=0`) | native | 44.4 / 44.3 | 44.2 / 44.4 | no change, GPU clock unchanged (~2,030-2,050 MHz) |
+| lean CPU: no workers, one recording thread, no copy filter | native | 44.4 / 44.3 | 44.5 / 44.5 | no change, GPU clock unchanged |
+| draw-preparation workers 4 → 0 | FSR 3.1 Quality | 59.0 / 59.1 | 59.1 / 59.5 | within noise |
+
+- The 2.2 ms the profiler charges to the copy shader is not its barriers: the copies themselves
+  (42 dispatches of 1024 workgroups through the game's memory in place), or GPU time attributed
+  to it.
+- The CPU's power does not starve this GPU, unlike the Steam Deck (upstream: workers off gave the
+  Deck's GPU +33 MHz and +3 % FPS; `DefaultWorkerCount` applies that rule only below 12 hardware
+  threads). Here the GPU runs at ~2.0 GHz of 2.5 with throttle reason `pl4` whatever the CPU
+  does. Package limits: 35 W long term, 60 W short term; RAPL energy counters need root, so the
+  CPU/GPU power split is not measured.
+- The CPU has no SMT, so the port's core reservation (`BB_CORE_RESERVE`, SMT CPUs only) does not
+  apply; threads spread over P, E and LP-E cores freely.
+
+### 2026-11-03: which compression matters; the feedback loop layout
+
+Native, standing, single runs between two baselines (44.2 / 44.3 FPS):
+
+| ANV switch | FPS | Change | Reading |
+|---|---|---|---|
+| `INTEL_DEBUG=nohiz` (depth compression off) | 43.4 | -1.8 % | HiZ is on and helps a little |
+| `INTEL_DEBUG=nofc` (fast clears off) | 43.7 | -1.2 % | fast clears happen and help a little |
+| `INTEL_DEBUG=norbc` | 29.8 | **-33 %** | the colour render-target compression of Xe2+; same loss as `noccs` |
+
+Every compression mechanism ANV has is in use for this game on Xe3, and colour compression is
+worth a third of the frame. The bandwidth win is already collected: more needs less traffic in
+the game's own passes.
+
+`BB_FEEDBACK_LOOP=0` (new experiment switch: the targets the game samples while drawing into them
+stay in the General layout instead of `ATTACHMENT_FEEDBACK_LOOP_OPTIMAL`): native 44.1 / 44.3
+against 44.2 / 44.4, FSR 3.1 Quality 59.2 against 59.4. No change: ANV keeps compression in
+either layout.
+
+### 2026-11-03: the 16-frame stall is the game's, not presentation
+
+Presentation ruled out (native, standing):
+
+| Window / present mode | FPS | p99 |
+|---|---|---|
+| windowed, Mailbox (harness default) | 44.2 / 44.1 | 41.2-41.3 ms |
+| full screen, Mailbox (the launcher's default; swapchain 2880x1919) | 43.3 / 43.6 | 41.5-41.9 ms |
+| windowed, Immediate | 43.9 | 41.5 ms |
+| full screen, Immediate | 42.7 | 42.5 ms |
+
+The stall is there in every mode. Full screen is ~1.5 % slower here (the swapchain is the panel's
+2880x1919, the window's 1694x1055).
+
+The long frame is followed by a short one, the pair adding up to two normal frames; the long
+frame carries no unusual work (dispatches, submissions, draws and stage-A CPU time are typical).
+Its period is in **game frames**, not time:
+
+| Run | FPS | Stall spacing | Spacing in time | Flip delay |
+|---|---|---|---|---|
+| native | 44.5 | 16 frames | 360 ms | 17.2 ms |
+| native, compression off | 30.0 | 16 frames | 535 ms | 26.4 ms |
+| native, walking | 45.8 | 16 frames | 350 ms | 16.4 ms |
+| native, full screen Immediate | 43.0 | 16 frames | 374 ms | 17.8 ms |
+| FSR 3.1 Quality | 58.6 | none (only the 5 s stats printout) | | |
+
+So the game does something every 16 frames that makes the flip wait for the GPU (the delay is
+~0.75 of a frame, so it scales with GPU load), and it only shows while the GPU is the limit. The
+CPU-side copy path (HLE) hides it by changing when the copies' work lands.
+
+Ruled out as the cause of the stall (native, standing; p99 41.3-41.7 ms in every run):
+real occlusion queries (`BB_OCCLUSION_QUERIES=0`: 44.0 FPS), occlusion label order
+(`BB_OCCLUSION_LABEL_ORDER=0`: 44.1), against 44.1 / 44.0. The game's waits per frame, averaged
+over 5 s, look alike on both copy paths (GXWorker semaphores ~20-21 ms, "waited for the previous
+frame" 18.6 vs 19.2 ms): the cause does not show in averages. It needs per-frame GPU timing,
+which `INTEL_MEASURE` would give if it did not crash ANV (above), or a per-frame mode of
+`BB_GPU_PROFILE`.
+
+## Status at the end of the 2026-11-03 session
+
+What the Arc B390 does with this game (native 1680x1048, no upscaler, ~44 FPS; FSR 3.1 Quality
+~59 FPS):
+
+- **The frame is limited by memory bandwidth on the GPU.** Colour compression (Xe2+ RBC) is on and
+  worth a third of the frame; HiZ and fast clears are on and worth 1-2 % each. ANV compiles the
+  game's shaders without spills.
+- **Nothing on the port's side moved it**: `NoContraction` in vertex stages only, robustness off,
+  the feedback loop layout, empty draws, frames ahead, the copy shader's barriers, CPU helper
+  threads (the CPU's power does not starve this GPU). Each was measured twice, interleaved, with
+  GPU clock logging.
+- **A stutter at native**: every 16th game frame's flip slips by ~0.75 of a frame, then the next
+  one goes out right behind it (2.7 times a second at 44 FPS). Not presentation, not occlusion
+  queries; it disappears with the CPU-side copy path (at -1.5 to -3.5 % average) and at FSR 3.1
+  Quality. Cause open.
+
+Next, in order:
+
+1. **The stutter**: per-frame GPU timing (a per-frame `BB_GPU_PROFILE` mode in the port, or
+   `INTEL_MEASURE` once it works) on the long frame against its neighbours; then what the game's
+   16-frame job is.
+2. **Mesa**: the `INTEL_MEASURE` crash (`_anv_measure_submit`, above) — fixing it makes ANV's own
+   per-event timing (resolves, clears, per-draw time by shader) available for everything else.
+3. **Power**: the GPU runs at ~2.0 of 2.5 GHz with throttle reason `pl4` in the `balanced`
+   platform profile. Worth one run in `performance` (needs root:
+   `sudo tuned-adm profile throughput-performance` or the platform profile), with RAPL energy
+   logged (also root), to see what the clock and frame rate do.
+4. **Bandwidth in the game's passes**: the heaviest full-screen passes are near-empty shaders
+   (`ps 8650418f`, 13 instructions, 0.48 ms; `ps f7229091`, 9 instructions, 0.44 ms over four
+   half-resolution passes); look at what they read and write (formats, whether a pass could be
+   merged or skipped on PC).
+5. **For players now**: FSR 3.1 Quality with the 60 FPS cap gives ~59 FPS here. The first play
+   session ran FSR 4 with the Native AA preset; without the FSR 4 assets (a source build) that
+   silently became FSR 3.1 at Native AA, the most expensive setting (~40 FPS). The fallback
+   should say so in the launcher and the overlay.

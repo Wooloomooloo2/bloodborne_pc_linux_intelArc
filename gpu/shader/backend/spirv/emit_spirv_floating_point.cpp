@@ -1,16 +1,42 @@
 // SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Float arithmetic, transcendentals and compares. Adds, multiplies, divides and FMAs are
-// NoContraction: the host compiler must not fuse what GCN computed separately.
+// NoContraction where results must match bit for bit across shaders: the vertex stages, whose
+// positions the depth prepass, the G-buffer and the shadow passes compute separately for the
+// same geometry (fused there, depth tests between those passes would fight). In fragment and
+// compute shaders it only stops the host compiler from fusing multiply and add (Intel's MAD,
+// AMD's FMA) and from reassociating. The macOS port measured it there first: 39 -> 60 FPS in
+// Central Yharnam (GPU 19.6 -> 12.1 ms/frame), screenshots unchanged; also dropping it from the
+// vertex stages gained nothing more.
+#include <cstring>
+
+#include "shader/backend/spirv/emit_spirv.h"
 #include "shader/backend/spirv/emit_spirv_instructions.h"
 #include "shader/backend/spirv/spirv_emit_context.h"
+#include "shim/bb_env.h"
 
 namespace Shader::Backend::SPIRV {
+
+int PreciseMode() {
+    static const int mode = [] {
+        const char* env = bb_env("BB_SPIRV_PRECISE");
+        return !env || !std::strcmp(env, "vertex") ? 0
+               : !std::strcmp(env, "all")          ? 1
+               : !std::strcmp(env, "none")         ? 2
+                                                   : 0;
+    }();
+    return mode;
+}
 
 namespace {
 
 Id Exact(EmitContext& ctx, Id op) {
-    ctx.Decorate(op, spv::Decoration::NoContraction);
+    const int mode = PreciseMode();
+    const bool vertex_stage =
+        ctx.sw_stage != SwStage::Fragment && ctx.sw_stage != SwStage::Compute;
+    if (mode == 1 || (mode == 0 && vertex_stage)) {
+        ctx.Decorate(op, spv::Decoration::NoContraction);
+    }
     return op;
 }
 

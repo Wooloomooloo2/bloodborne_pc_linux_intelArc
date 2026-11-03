@@ -15,4 +15,9 @@ namespace Shader::Backend::SPIRV {
 [[nodiscard]] std::vector<u32> EmitSPIRV(const Profile& profile, const RuntimeInfo& runtime_info,
                                          const IR::Program& program, Bindings& binding);
 
+/// BB_SPIRV_PRECISE: where float adds, multiplies and FMAs are NoContraction (0 vertex stages,
+/// the default; 1 all stages; 2 none). Part of the shader cache version
+/// (PipelineStore::ShaderBinaryVersion), so switching it rebuilds the cached SPIR-V.
+int PreciseMode();
+
 } // namespace Shader::Backend::SPIRV

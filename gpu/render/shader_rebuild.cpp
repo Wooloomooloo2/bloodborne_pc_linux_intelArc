@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport render: the pipeline cache after an update (shader_rebuild.h). A build whose shader
-// compiler writes other SPIR-V (PipelineStore::ShaderBinaryVersion) used to clear the cache: the
+// compiler writes other SPIR-V (PipelineStore::ShaderBinaryVersion()) used to clear the cache: the
 // first session after every update compiled each shader again while the game ran. The cache
 // keeps the inputs of every compilation (BbShaderCapture::TakeInput, ".in"); before the game
 // maps its memory, those are translated again here, the SPIR-V and metadata rewritten and the
@@ -157,7 +157,7 @@ std::vector<u8> RewriteMeta(std::vector<u8>&& meta, const std::vector<u8>& info,
     Serialization::Archive out;
     Serialization::Writer writer{out};
     writer.Write(Vulkan::PipelineStore::ShaderMetaVersion);
-    writer.Write(Vulkan::PipelineStore::ShaderBinaryVersion);
+    writer.Write(Vulkan::PipelineStore::ShaderBinaryVersion());
     writer.Write(perm_hash);
     writer.Write(perm_idx);
     writer.Write(motion_params);
@@ -563,7 +563,7 @@ int RebuildCaches() {
         u32 versions[HeaderWords];
         std::memcpy(versions, header.data(), sizeof(versions));
         if (versions[0] != CacheMagic ||
-            versions[1] == Vulkan::PipelineStore::ShaderBinaryVersion ||
+            versions[1] == Vulkan::PipelineStore::ShaderBinaryVersion() ||
             versions[2] != Vulkan::PipelineStore::ShaderMetaVersion ||
             versions[3] != Vulkan::PipelineStore::PipelineKeyVersion) {
             continue; // this build's already, or one the pipeline cache clears
@@ -588,7 +588,7 @@ int RebuildCaches() {
                         dir.filename().string().c_str());
             continue;
         }
-        versions[1] = Vulkan::PipelineStore::ShaderBinaryVersion;
+        versions[1] = Vulkan::PipelineStore::ShaderBinaryVersion();
         std::memcpy(header.data(), versions, sizeof(versions));
         if (WriteFile(dir / "profile.bin", header)) {
             ++rebuilt;
@@ -743,7 +743,7 @@ int ImportRecipes(const char* cache_dir, const char* pack, const char* game_dir,
     u32 versions[HeaderWords];
     std::memcpy(versions, header.data(), sizeof(versions));
     if (versions[0] != CacheMagic ||
-        versions[1] != Vulkan::PipelineStore::ShaderBinaryVersion ||
+        versions[1] != Vulkan::PipelineStore::ShaderBinaryVersion() ||
         versions[2] != Vulkan::PipelineStore::ShaderMetaVersion ||
         versions[3] != Vulkan::PipelineStore::PipelineKeyVersion) {
         return 0;

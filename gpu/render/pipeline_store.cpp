@@ -18,11 +18,16 @@
 #include "render/blob_store.h"
 #include "render/pipeline_cache.h"
 #include "render/pipeline_store.h"
+#include "shader/backend/spirv/emit_spirv.h"
 #include "shader/info.h"
 #include "shader/specialization.h"
 #include "vulkan/instance.h"
 
 namespace Vulkan {
+
+u32 PipelineStore::ShaderBinaryVersion() {
+    return ShaderBinaryBase * 16u + static_cast<u32>(Shader::Backend::SPIRV::PreciseMode());
+}
 
 namespace {
 
@@ -64,7 +69,7 @@ bool LoadShaderMeta(Serialization::Archive& ar, Shader::Info& info,
         return false;
     }
     reader.Read(binary_version);
-    if (binary_version != PipelineStore::ShaderBinaryVersion) {
+    if (binary_version != PipelineStore::ShaderBinaryVersion()) {
         return false;
     }
     u64 perm_hash{};
@@ -103,7 +108,7 @@ void SaveShaderMeta(const Shader::Info& info, const Shader::StageSpecialization&
     Serialization::Archive ar;
     Serialization::Writer writer{ar};
     writer.Write(ShaderMetaVersion);
-    writer.Write(ShaderBinaryVersion);
+    writer.Write(ShaderBinaryVersion());
     writer.Write(perm_hash);
     writer.Write(perm_idx);
     writer.Write(Shader::MotionVectors::params_address);
@@ -361,10 +366,12 @@ bool PipelineCache::LoadGraphicsPipeline(Serialization::Archive& ar, std::vector
 
 namespace {
 /// The cache's header: a tag and the versions; the device profile follows.
-constexpr std::array<u32, 4> CacheVersions{0x42425043u, PipelineStore::ShaderBinaryVersion,
-                                           PipelineStore::ShaderMetaVersion,
-                                           PipelineStore::PipelineKeyVersion};
-constexpr size_t HeaderSize = sizeof(CacheVersions);
+std::array<u32, 4> CacheVersionsNow() {
+    return {0x42425043u, PipelineStore::ShaderBinaryVersion(), PipelineStore::ShaderMetaVersion,
+            PipelineStore::PipelineKeyVersion};
+}
+const std::array<u32, 4> CacheVersions = CacheVersionsNow();
+constexpr size_t HeaderSize = sizeof(std::array<u32, 4>);
 } // namespace
 
 void PipelineCache::SaveProfile() {

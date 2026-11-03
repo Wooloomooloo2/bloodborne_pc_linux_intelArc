@@ -20,7 +20,11 @@ struct StageSpecialization;
 namespace Vulkan::PipelineStore {
 
 /// Increment the one whose layout changes.
-constexpr u32 ShaderBinaryVersion = 24u; // paged records read once, a lookup per page (PagedDwords)
+/// 25: NoContraction in the vertex stages only (24: paged records read once, a lookup per page).
+constexpr u32 ShaderBinaryBase = 25u;
+/// The SPIR-V's version: ShaderBinaryBase and the BB_SPIRV_PRECISE mode, which changes the
+/// SPIR-V without changing its keys (a cache of another mode is rebuilt, shader_rebuild.cpp).
+u32 ShaderBinaryVersion();
 constexpr u32 ShaderMetaVersion = 8u;    // the object motion buffer addresses
 constexpr u32 PipelineKeyVersion = 5u;   // Info layout (ImageResource::needs_native)
 

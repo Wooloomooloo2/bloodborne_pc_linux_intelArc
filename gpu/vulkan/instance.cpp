@@ -299,9 +299,12 @@ void Instance::CreateDevice() {
     ext.maintenance_5 = enable(VK_KHR_MAINTENANCE_5_EXTENSION_NAME);
     ext.maintenance_8 = enable(VK_KHR_MAINTENANCE_8_EXTENSION_NAME);
     ext.buffer_marker = enable(VK_AMD_BUFFER_MARKER_EXTENSION_NAME); // GPU breadcrumbs
-    // The feedback loop layout only with its dynamic state.
+    // The feedback loop layout only with its dynamic state. BB_FEEDBACK_LOOP=0 (experiment): not
+    // used, targets the game samples while drawing into them stay in the General layout (what a
+    // driver does with compressed images in either layout).
     ext.feedback_loop = has(VK_EXT_ATTACHMENT_FEEDBACK_LOOP_LAYOUT_EXTENSION_NAME) &&
-                        has(VK_EXT_ATTACHMENT_FEEDBACK_LOOP_DYNAMIC_STATE_EXTENSION_NAME);
+                        has(VK_EXT_ATTACHMENT_FEEDBACK_LOOP_DYNAMIC_STATE_EXTENSION_NAME) &&
+                        !bb_env_off("BB_FEEDBACK_LOOP");
     if (ext.feedback_loop) {
         enable(VK_EXT_ATTACHMENT_FEEDBACK_LOOP_LAYOUT_EXTENSION_NAME);
         enable(VK_EXT_ATTACHMENT_FEEDBACK_LOOP_DYNAMIC_STATE_EXTENSION_NAME);
