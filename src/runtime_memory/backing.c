@@ -29,7 +29,12 @@ static int pool(void) {
     pool_fd=bb_section_create(POOL_SIZE+FLEX_SPAN);
     if (pool_fd<0) return -1;
 #else
-    pool_fd=memfd_create("bb-guest-memory", MFD_CLOEXEC|MFD_ALLOW_SEALING);
+    /* BB_MEMORY_DIR: the pool as an unnamed file in that directory instead of a memfd, for a
+     * tmpfs mounted with huge=within_size (2 MiB pages without the system-wide shmem_enabled
+     * setting; no seals there, which only udmabuf imports need). */
+    const char *dir=bb_env("BB_MEMORY_DIR");
+    pool_fd=dir && *dir ? open(dir,O_TMPFILE|O_RDWR|O_CLOEXEC,0600)
+                        : memfd_create("bb-guest-memory", MFD_CLOEXEC|MFD_ALLOW_SEALING);
     if (pool_fd<0 || ftruncate(pool_fd,(off_t)(POOL_SIZE+FLEX_SPAN))) return -1;
     /* udmabuf (the GPU's lazy imports of guest memory) needs the size sealed. */
     (void)fcntl(pool_fd,F_ADD_SEALS,F_SEAL_SHRINK|F_SEAL_GROW);

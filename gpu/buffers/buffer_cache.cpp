@@ -126,6 +126,23 @@ bool GarlicInVram() {
     return on && !FixedArena();
 }
 
+/// Whether the game's memory pool gets 2 MiB pages: on a tmpfs given by BB_MEMORY_DIR (mounted
+/// huge=...), or as a memfd when the system has shmem THP on (the runtime advises it huge).
+static bool GuestMemoryHugePages() {
+    if (const char* dir = bb_env("BB_MEMORY_DIR"); dir && *dir) {
+        return true;
+    }
+    char mode[128]{};
+    if (FILE* f = std::fopen("/sys/kernel/mm/transparent_hugepage/shmem_enabled", "r")) {
+        const size_t n = std::fread(mode, 1, sizeof(mode) - 1, f);
+        mode[n] = 0;
+        std::fclose(f);
+    }
+    // The selected mode is the bracketed one: "always within_size advise [never] deny force".
+    return std::strstr(mode, "[always]") || std::strstr(mode, "[within_size]") ||
+           std::strstr(mode, "[advise]") || std::strstr(mode, "[force]");
+}
+
 static constexpr size_t GDS_BUFFER_SIZE = 64_KB;
 /// The stream ring: 128 MiB, 32 on GPUs with 3 GiB of VRAM or less (a frame streams about
 /// 0.4 MiB, BB_STREAM_STATS); BB_STREAM_BUFFER_MB another size.
@@ -172,7 +189,18 @@ BufferCache::BufferCache(const Vulkan::Instance& instance_, Vulkan::Scheduler& s
     // On an Arc B390 (Xe3) a probe read it 3.4x slower than driver memory (2 MiB pages read as
     // fast), and the G-buffer passes were bound by it: copying the read vertices into the stream
     // buffer took FSR 3.1 Quality from 36 to 47 FPS and Native AA from 28.5 to 33.7 (2026-11-04).
-    vertex_read_copy_default = integrated_gpu && instance.GetVendorID() == 0x8086;
+    // With 2 MiB pages the copy only costs (the CPU's memcpy takes part of the shared power
+    // limit): Quality 48.8 with it, 50.9 without.
+    const bool huge_pages = GuestMemoryHugePages();
+#ifdef __linux__
+    vertex_read_copy_default = integrated_gpu && instance.GetVendorID() == 0x8086 && !huge_pages;
+#endif
+    if (integrated_gpu) {
+        std::printf("Guest memory: %s pages%s\n", huge_pages ? "2 MiB" : "4 KiB",
+                    huge_pages ? ""
+                               : " (shmem THP off: the GPU reads the game's memory in place "
+                                 "slower; transparent_hugepage/shmem_enabled=advise fixes it)");
+    }
     // bbport: the memory model needs the game's direct memory in chunks the GPU can use in place
     // (dma-buf export or host memory import: BbGuestMemory::Usable).
     if (!BbGuestMemory::MemoryModuleFits(instance) || !BbGuestMemory::Usable(instance)) {

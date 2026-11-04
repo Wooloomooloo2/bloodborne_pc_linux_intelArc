@@ -479,8 +479,36 @@ stall reports dropped (684 → 156 windows at Native AA).
 Now the default on Intel's integrated GPUs (`BB_VERTEX_READ_COPY=0` restores in place). Other
 integrated GPUs (Steam Deck) unchanged until measured there.
 
-**Open:** `shmem_enabled=advise` (root; persistent with the kernel argument
-`transparent_hugepage_shmem=advise`) should give the memfd 2 MiB pages through the runtime's
-existing `MADV_HUGEPAGE`, which would fix every in-place read (index data, the copy shader's
-sources and destinations, constants) and not only vertex data, without the CPU copy. To measure
-with and without the copy.
+### 2 MiB pages for the game's memory: the real fix
+
+The copy works around 4 KiB pages; the pool can have 2 MiB pages instead. Probe: a shared file
+on a tmpfs mounted `huge=always`, imported the same way, reads scattered at 42.5 ms, the speed
+of driver memory (memfd with 4 KiB pages: 141 ms). In the game, `BB_MEMORY_DIR=<dir>` (new) puts
+the pool on such a tmpfs: 4.4 GB `ShmemPmdMapped`, imports 3-4x faster again (512 MiB 40 ms), and
+with 2 MiB pages the vertex copy only costs (its memcpy pulls the GPU clock from ~2.07 to
+~1.9 GHz under the shared `pl4` limit). The copy is therefore on by default only when the pool
+has 4 KiB pages: `BB_MEMORY_DIR` unset and `transparent_hugepage/shmem_enabled` neither
+`always`, `within_size`, `advise` nor `force`. The log says which (`Guest memory: 4 KiB pages
+...`).
+
+Interleaved, Quality, defaults, standing 60 s:
+
+| pool pages | FPS | p99 | >50 ms frames | GPU clock |
+|---|---|---|---|---|
+| 4 KiB (memfd, shmem THP off; vertex copy on) | 47.1 / 46.7 | 24 ms | 12 / 11 | 1.89 GHz |
+| 2 MiB (tmpfs `huge=always`; vertex copy off) | 51.8 / 50.9 | 22 ms | 0 / 0 | 2.07 GHz |
+
+Against the evening's start (Quality 35.7-37.0 in place, 4 KiB): +38 %.
+
+For players: `shmem_enabled=advise` (only memory that asks, i.e. the game's pool, gets huge
+pages) makes the runtime's existing `MADV_HUGEPAGE` on the memfd work, with no option needed:
+
+```
+echo 'w /sys/kernel/mm/transparent_hugepage/shmem_enabled - - - - advise' | sudo tee /etc/tmpfiles.d/bbport-shmem-thp.conf
+sudo systemd-tmpfiles --create /etc/tmpfiles.d/bbport-shmem-thp.conf
+```
+
+Not yet measured through that route (needs root; the tmpfs route is the same shmem huge-folio
+path, tested in a user namespace: `unshare -Urm` + `mount -t tmpfs -o huge=always`). The copy
+shader (`cs fefebf9f`, 2.2-2.5 ms, the largest item left at Quality) did not change with 2 MiB
+pages: not TLB-bound.
