@@ -11,7 +11,8 @@ RESULTS=${RESULTS:-$B/results_ab}
 HOLD=${HOLD:-60}
 SETTLE=${SETTLE:-15}
 GT=/sys/class/drm/card1/device/tile0/gt0/freq0
-TEMP=/sys/class/hwmon/hwmon11/temp1_input
+# The package temperature: coretemp's hwmon (its number differs between kernels and boots).
+TEMP=${TEMP:-$(grep -lx coretemp /sys/class/hwmon/hwmon*/name | head -1 | xargs dirname)/temp1_input}
 mkdir -p "$RESULTS"
 name=$1 up=$2 preset=$3; shift 3
 
