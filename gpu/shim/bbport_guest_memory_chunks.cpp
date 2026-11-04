@@ -181,6 +181,13 @@ bool ImportHost(void* pointer, u64 size, vk::Buffer& buffer, vk::DeviceMemory& m
     const vk::MemoryAllocateFlagsInfo address_flags{
         .flags = vk::MemoryAllocateFlagBits::eDeviceAddress,
     };
+    // Its pages allocated before the import: xe's userptr pinning (Linux 7.x, drm_gpusvm over
+    // hmm_range_fault) walks the range again from its start after each page it has to fault in,
+    // so memfd pages the game had not touched yet took quadratic time (512 MiB: 55 s at start
+    // on an Arc B390, 10 ms with them present). The import pins them all anyway.
+#ifdef MADV_POPULATE_WRITE
+    (void)madvise(pointer, size, MADV_POPULATE_WRITE);
+#endif
     const vk::ImportMemoryHostPointerInfoEXT import_info{
         .pNext = LayerMemory() ? &address_flags : nullptr,
         .handleType = vk::ExternalMemoryHandleTypeFlagBits::eHostAllocationEXT,
