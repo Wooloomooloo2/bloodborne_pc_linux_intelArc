@@ -512,3 +512,16 @@ Not yet measured through that route (needs root; the tmpfs route is the same shm
 path, tested in a user namespace: `unshare -Urm` + `mount -t tmpfs -o huge=always`). The copy
 shader (`cs fefebf9f`, 2.2-2.5 ms, the largest item left at Quality) did not change with 2 MiB
 pages: not TLB-bound.
+
+### Power profile: `performance` is slower
+
+`powerprofilesctl set performance` (no root needed), Quality: 4 KiB pages 46.7 FPS (balanced
+47.1 / 46.7), 2 MiB pages 47.9 (balanced 51.8 / 50.9); the GPU clock fell to ~1.87 GHz. Under
+the shared package limit (`pl4` throughout) the performance profile gives the CPU more of it
+and the GPU less. Keep `balanced` for this game.
+
+### Soak: 10 minutes walking, defaults (4 KiB pages, vertex copy on), Quality
+
+45.8 FPS average over 28,353 frames, p99 31.9 ms, no faults or errors. FPS steady from the first
+minute to the last (35-53 with the walk's direction). Memory flat after the level loaded: RSS
+7.7 GB and Vulkan memory 1,180 MB from minute 3 to minute 10 (no growth from the copies).
