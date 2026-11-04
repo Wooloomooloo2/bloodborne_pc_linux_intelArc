@@ -1184,7 +1184,8 @@ void Rasterizer::NewGuestWorkInOrder() {
     // written the data again in between).
     // (Live toggles: always, so copies made before a switch-off never serve after a switch-on.)
     static const bool may_copy = bb_env_on("BB_HOT_VERTEX_COPY") ||
-                                 bb_env_on("BB_VERTEX_READ_COPY") || bb_env("BB_TOGGLE_FILE");
+                                 VideoCore::BufferCache::VertexReadCopyOn() ||
+                                 bb_env("BB_TOGGLE_FILE");
     if (!may_copy) {
         return;
     }

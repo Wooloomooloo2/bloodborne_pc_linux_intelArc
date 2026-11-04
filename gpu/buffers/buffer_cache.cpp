@@ -61,6 +61,8 @@ namespace VideoCore {
 
 /// On an integrated GPU (Steam Deck) VRAM is the same memory: everything stays in place there.
 bool integrated_gpu = false;
+/// BB_VERTEX_READ_COPY's default (BufferCache::VertexReadCopyOn): on for Intel's integrated GPUs.
+bool vertex_read_copy_default = false;
 /// bbport: Garlic memory (type 3) is cached in VRAM, Onion in place. Optimizations, for A/B: VRAM copies uploaded by GPU copies from the
 /// guest chunks (BB_CHUNK_UPLOADS=0: CPU staging), texture data bound in place whatever its type
 /// (BB_INPLACE_TEXTURES=1; off: by type).
@@ -165,6 +167,12 @@ BufferCache::BufferCache(const Vulkan::Instance& instance_, Vulkan::Scheduler& s
       gds_buffer{instance, 0, GDS_BUFFER_SIZE, MemoryType::Stream, "GDS Buffer"},
       memory_semaphore{instance} {
     integrated_gpu = instance.IsIntegrated();
+    // Vertex data read in place sits in the game's memfd, whose pages are 4 KiB when the system
+    // has shmem THP off (the usual default): scattered vertex fetch from it misses the GPU's TLB.
+    // On an Arc B390 (Xe3) a probe read it 3.4x slower than driver memory (2 MiB pages read as
+    // fast), and the G-buffer passes were bound by it: copying the read vertices into the stream
+    // buffer took FSR 3.1 Quality from 36 to 47 FPS and Native AA from 28.5 to 33.7 (2026-11-04).
+    vertex_read_copy_default = integrated_gpu && instance.GetVendorID() == 0x8086;
     // bbport: the memory model needs the game's direct memory in chunks the GPU can use in place
     // (dma-buf export or host memory import: BbGuestMemory::Usable).
     if (!BbGuestMemory::MemoryModuleFits(instance) || !BbGuestMemory::Usable(instance)) {

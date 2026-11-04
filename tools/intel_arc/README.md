@@ -8,6 +8,8 @@ Used for `docs/INTEL_ARC_PLAN.md`. Not part of the build.
 | `abench_walk.sh` | The same, `WALK=1` walks and turns during the measurement (`tools/soak_walk.sh`'s pattern). |
 | `summarize.py RESULTS NAME...` | One line per run: FPS, median, p99, frames over 50 ms, mean GPU clock, max temperature, throttle reasons. |
 | `rawimg.py png RAW OUT.png` / `rawimg.py diff A.raw B.raw` | The presented-frame dumps (RGBA8 1680x1050) as PNG, and their difference. |
+| `readprobe.c` (+ `read.comp`, `gather.comp`) | GPU read speed, sequential and scattered, from driver memory, a memfd host import (4 KiB pages) and an anonymous THP import: the GPU TLB cost of the game's memory (build lines in the file). |
+| `importprobe.c` | Host-import time by page state and size: the Linux 7.x xe pinning that is quadratic for untouched memfd pages. |
 | `memprobe.c` | Repeats the port's guest-memory startup checks (host-pointer import, dma-buf export and its CPU read speed) outside the game. |
 | `ccs_probe.c` | Creates the port's kinds of render targets and prints ANV's memory requirements. |
 | `compile_cs.c` | Compiles one compute SPIR-V on the Intel GPU (to see `INTEL_DEBUG` output for a known module). |

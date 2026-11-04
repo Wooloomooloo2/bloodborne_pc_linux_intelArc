@@ -421,3 +421,66 @@ Next, in order:
    session ran FSR 4 with the Native AA preset; without the FSR 4 assets (a source build) that
    silently became FSR 3.1 at Native AA, the most expensive setting (~40 FPS). The fallback
    should say so in the launcher and the overlay.
+
+## 2026-11-04: Ubuntu 26.10 (kernel 7.3, Mesa 26.2.4), vertex fetch and the GPU TLB
+
+Same laptop, now on Ubuntu 26.10: kernel 7.3.0-9 (`xe`), Mesa 26.2.4 (`mesa-vulkan-drivers
+26.2.4-1ubuntu1`). The save has moved on: the bench spot is now **outdoors** (a cobbled street
+in the Cathedral Ward area), heavier than the Fedora hall, so the numbers below are not
+comparable with the Fedora tables. Per-pass costs that do not depend on the scene matched Fedora
+(`ps 8650418f` 0.465 vs 0.48 ms, `ps f7229091` 0.433 vs 0.44 ms, the lighting passes within
+0.1 ms): the driver and kernel are not slower.
+
+### Start-up: four minutes before the first frame (fixed)
+
+xe's userptr pinning on Linux 7.x goes through `drm_gpusvm_get_pages` → `hmm_range_fault`
+(perf: 39 % `hmm_vma_handle_pte`, 28 % `vm_normal_page`, under `xe_vma_userptr_pin_pages`). For
+memfd pages not yet faulted in, the walk restarts from the range start after each fault:
+quadratic. Imports took 4.9 s (152 MiB), 55 s (512 MiB), 176 s (886 MiB). A probe repeats it
+outside the game (untouched memfd 32 MiB 224 ms, 128 MiB 3.4 s; written or read pages under
+10 ms). Fix: `MADV_POPULATE_WRITE` before each import (48 / 157 / 269 ms).
+
+### The fixed cost is vertex fetch from 4 KiB pages
+
+FSR 3.1 here: Native AA 25.5-28.5 FPS, Quality 37, Performance 39.5. Performance quarters the
+pixels of Quality and gains 2 FPS: most of the frame does not scale with resolution.
+
+- Per-draw profile (`BB_GPU_PROFILE_DRAWS=1`, Performance, 840x528): `vs 9da6aacb` + `ps bb10e440`
+  124 draws 5.27 ms (42 µs each), `vs 7620368b` + `ps 8aba0ecd` 66 draws 3.17 ms (48 µs).
+  The vertex shader is small (an instance 3x4 matrix, the view-projection, ~40 FMAs). Unchanged
+  by robustness off, by `BB_SPIRV_PRECISE=none`, by `model_lod=1` and by the scene size: not ALU,
+  not geometry count, not pixels.
+- The game's vertex data is bound in place (1,351 MB bound per frame, 100 % in place) from the
+  memfd. `/sys/kernel/mm/transparent_hugepage/shmem_enabled` is `never` (Ubuntu's default, also
+  upstream's), so the memfd has 4 KiB pages and the runtime's `MADV_HUGEPAGE` on it does nothing.
+- Probe (`readprobe`, 1 GiB, Arc B390): sequential reads 101-105 GB/s from driver memory, the
+  memfd import and an anonymous THP import alike. **Scattered** 16-byte reads: driver memory
+  42 ms, anonymous THP import 43 ms, **memfd import (4 KiB pages) 141 ms: 3.4x slower**. It is
+  the GPU's TLB; xe maps 2 MiB pages when it gets them.
+- `BB_VERTEX_READ_COPY=1` (upstream's experiment: the vertices each draw reads copied by the CPU
+  into the stream buffer once per guest submission, ~92 MB a frame here) moves 98 % of the vertex
+  data out of the memfd. The two draws above: 5.27 → 2.39 ms and 3.17 → 1.42 ms.
+
+Interleaved A/B, 60 s standing, no profiler:
+
+| FSR 3.1 | in place | vertex read copy | |
+|---|---|---|---|
+| Native AA | 28.4 / 28.5 FPS, >50 ms frames 198 / 220 | 33.6 / 33.7 FPS, 28 / 50 | +18 % |
+| Quality (x1.5) | 35.7 / 37.0 FPS, p99 33-35 ms | 48.3 / 45.8 FPS, p99 23-26 ms | +30 % |
+
+Frame dumps: base-to-copy difference 1.80/255 (Native AA) and 5.38/255 (Quality) against
+base-to-base 1.76 and 5.24, i.e. noise. The GPU clock drops from ~2.12 to ~1.9 GHz with the
+copy (the CPU's memcpy takes part of the package limit, `pl4`); still a net gain.
+
+Walking (`WALK=1 abench_walk.sh`, 60 s): Native AA 27.6 → 30.9 FPS (p99 73 → 61 ms, >50 ms
+frames 116 → 56), Quality 35.1 → 43.2 FPS (p99 42 → 29 ms). No new log warnings; the port's
+stall reports dropped (684 → 156 windows at Native AA).
+
+Now the default on Intel's integrated GPUs (`BB_VERTEX_READ_COPY=0` restores in place). Other
+integrated GPUs (Steam Deck) unchanged until measured there.
+
+**Open:** `shmem_enabled=advise` (root; persistent with the kernel argument
+`transparent_hugepage_shmem=advise`) should give the memfd 2 MiB pages through the runtime's
+existing `MADV_HUGEPAGE`, which would fix every in-place read (index data, the copy shader's
+sources and destinations, constants) and not only vertex data, without the CPU copy. To measure
+with and without the copy.

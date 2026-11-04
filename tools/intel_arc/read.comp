@@ -1,0 +1,16 @@
+#version 450
+// Each invocation reads a strided set of uvec4s and writes one sum, so the read bandwidth dominates.
+layout(local_size_x = 256) in;
+layout(std430, binding = 0) readonly buffer Src { uvec4 src[]; };
+layout(std430, binding = 1) writeonly buffer Dst { uint dst[]; };
+layout(push_constant) uniform P { uint count; uint per; } p;
+void main() {
+    uint id = gl_GlobalInvocationID.x;
+    uint threads = gl_NumWorkGroups.x * 256u;
+    uvec4 acc = uvec4(0);
+    for (uint i = 0u; i < p.per; ++i) {
+        uint idx = id + i * threads;
+        if (idx < p.count) acc += src[idx];
+    }
+    dst[id] = acc.x + acc.y + acc.z + acc.w;
+}

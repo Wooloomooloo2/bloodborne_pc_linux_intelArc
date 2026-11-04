@@ -1,0 +1,14 @@
+#version 450
+// Each invocation reads uvec4s at hashed (scattered) indices over the whole buffer, like vertex
+// fetch spread over a large heap: sensitive to GPU TLB reach.
+layout(local_size_x = 256) in;
+layout(std430, binding = 0) readonly buffer Src { uvec4 src[]; };
+layout(std430, binding = 1) writeonly buffer Dst { uint dst[]; };
+layout(push_constant) uniform P { uint count; uint per; } p;
+uint hash(uint x) { x ^= x >> 16; x *= 0x7feb352du; x ^= x >> 15; x *= 0x846ca68bu; x ^= x >> 16; return x; }
+void main() {
+    uint id = gl_GlobalInvocationID.x;
+    uvec4 acc = uvec4(0);
+    for (uint i = 0u; i < p.per; ++i) acc += src[hash(id * 64u + i) % p.count];
+    dst[id] = acc.x + acc.y + acc.z + acc.w;
+}

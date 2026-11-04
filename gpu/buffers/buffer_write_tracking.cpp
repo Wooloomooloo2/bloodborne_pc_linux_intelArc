@@ -423,7 +423,9 @@ std::optional<std::pair<const Buffer*, u64>> BufferCache::HotVertexCopy(VAddr ad
 }
 
 bool BufferCache::VertexReadCopyOn() {
-    static const bool env_on = bb_env_on("BB_VERTEX_READ_COPY");
+    // BB_VERTEX_READ_COPY=1/0 overrides the default (on for Intel's integrated GPUs).
+    static const bool env_on = bb_env_on("BB_VERTEX_READ_COPY") ||
+                               (vertex_read_copy_default && !bb_env_off("BB_VERTEX_READ_COPY"));
     return env_on != BbToggle::Experiment(2048);
 }
 

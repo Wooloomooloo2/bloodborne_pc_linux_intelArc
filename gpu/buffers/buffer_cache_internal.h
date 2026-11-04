@@ -304,6 +304,7 @@ inline void EraseTwins(VAddr begin, VAddr end) {
 
 // Defined in buffer_cache.cpp (its configuration from the environment).
 extern bool integrated_gpu;
+extern bool vertex_read_copy_default;
 bool ChunkUploads();
 bool ChunkTextures();
 bool InPlaceTextures();
