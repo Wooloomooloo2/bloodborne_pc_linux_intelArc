@@ -525,3 +525,64 @@ and the GPU less. Keep `balanced` for this game.
 45.8 FPS average over 28,353 frames, p99 31.9 ms, no faults or errors. FPS steady from the first
 minute to the last (35-53 with the walk's direction). Memory flat after the level loaded: RSS
 7.7 GB and Vulkan memory 1,180 MB from minute 3 to minute 10 (no growth from the copies).
+
+## 2026-11-05: Windows 11 on the same laptop (Intel driver, native MSYS2 CLANG64 build)
+
+Built natively in MSYS2 CLANG64 (`C:\msys64`): xbyak is not packaged there (a clone passed with
+`-DCMAKE_CXX_FLAGS=-I...`), the FSR-Vulkan patches applied as `build.sh` does, the runner frozen
+with Windows Python 3.12 + PyInstaller, the WPF launcher with the .NET 10 SDK.
+
+### Start-up: four Windows-only bugs between the launch and the first level
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `STOP: the GPU driver cannot use the game's memory in place` | as on Linux (device-local types only) | the branch's `FindHostType` fallback |
+| Black screen, `submitted 18, decoded 18`, the main thread at 97 % in `NtQuerySystemInformation` | MinGW's `gettimeofday` asks Windows for the time zone when given one; the game calls it thousands of times while it loads | `src/runtime_time.c`: precise system clock, the zone read once |
+| Black screen again, the main thread polling the job runner (`+0x103dfb3`, `+0x1067561`) | the game files were damaged: `pkg_extract` built for Windows used MinGW's 32-bit `fseeko`, every file past 2 GB of the 31 GB package was read from the wrong place (21,872 of 28,847 files) | `_fseeki64` / `_ftelli64` in the extractor; all `.dcx` checked (DCX header, DFLT unpacks) |
+| Null free-list links in the range allocator (`+0x26a9f53`, `+0x26aa0bd`) seconds after the title, 5 of 5 runs | GPU-written end-of-pipe labels (portable Vulkan updates: no `VK_AMD_buffer_marker`) on the Windows Intel driver; `BB_FREE_CHECK=1`, which also turns GPU labels off, hid it | `gpu/render/raster_signals.cpp`: labels written by a CPU thread after the GPU on Intel under Windows (`BB_GPU_LABELS=1` forces them back) |
+
+Also: a missing extent hint after a CB/CMASK/DB setup (`STOP: GPU library assertion failed`,
+once in ~25 runs while a level loaded) now logs and sizes the surface from its registers.
+
+Open: the opening movie of a New Game panicked once in two tries (`Mutex is not initialized`,
+`Mv_AudioPlayThread`, the movie's audio thread on an object that is not set up yet); a second
+try played the movie. Same panic as upstream's 2026-10-27 Windows note, after its fix.
+
+### Measurements (Iosefka's Clinic, standing, 45 s windows after 25 s; Balanced power mode)
+
+| Configuration | FPS | median | p99 |
+|---|---|---|---|
+| launcher defaults: 2880x1920 (`output_res=auto`), FSR 4 -> FSR 3.1 Native AA | 23.9 | 41.8 ms | 46.3 ms |
+| 1920x1280, FSR 3.1 Native AA | 46.5 | 21.4 ms | 33 ms |
+| **1920x1280 native, upscaler off** | **57.1-57.6** | 17.2 ms | 26-30 ms |
+| same, Windows power mode **Best performance** | **63.3-64.5** | 15.3 ms | 24 ms |
+
+Per-draw profile at 1920x1280 native: 15.7 ms GPU a frame (1.4 ms of it idle between
+submissions), ~1,240 draws; the heaviest: `ps e55e45eb` 1.32 ms (4 full/half-size passes),
+the G-buffer `vs 9da6aacb` 1.22 ms (91 draws, 13 us each: faster than Linux's 19 us *with* the
+vertex copy, so 4 KiB pages hurt less here), `vs 167daba6 / ps 1ae03d75` 1.10 ms in 145 draws
+to 64x64 / 32x32 targets (~7.5 us each: per-draw overhead), the copy shader 0.53 ms.
+
+No change (within ~1 %): `BB_GARLIC_VRAM=1`, `BB_SPIRV_PRECISE=none`, `BB_ROBUSTNESS=0`,
+`BB_TIMELINE_POLL_US=500/1000`, `BB_FRAMES_AHEAD=2`, `BB_ASYNC_SUBMIT=0`,
+`BB_COPY_SHADER_NATIVE=0`, Immediate present; spin/worker switches alone (`BB_GPU_SPIN_US=0`,
+`BB_PREP_WORKERS=0`, `BB_VK_RECORD_THREADS=1`, `BB_TEXTURE_HELPER=0`, `BB_PIPE_SPIN_US=0`)
+nothing, all five together +1.8 %. Worse: `BB_VERTEX_READ_COPY=1` 34 FPS (-40 %: the CPU's copies
+take the package's power), `BB_OCCLUSION_QUERIES=0` 52.7, fullscreen 50.0.
+
+The game uses ~5.6 cores at 57 FPS (2.9 user, 2.6 kernel: thread wakes and driver calls spread
+over the port's recording threads and the game's GX workers; no page protection calls). The
+CPU and GPU share the package limit: that is why the power mode is worth 12 % here (on Linux
+`performance` was slower).
+
+The game's own effects, each off alone (57.0 with all on): dynamic light shadows 62.7
+(+10 %), motion blur 59.0, depth of field 58.0; SSAO, bloom, chromatic aberration none.
+
+### Changes for players
+
+- `run.py`: `output_res=auto` on an integrated GPU caps the output at ~2.5 MP with the
+  monitor's shape (2880x1920 -> 1920x1280); `BB_IGPU_OUTPUT_CAP=0` or an explicit `output_res`
+  keeps the full panel.
+- Launcher: *Best performance power mode while playing* (Windows, off by default): the runner
+  switches Windows' power mode and puts the previous one back when the game ends, after the
+  launcher's Stop (`bbport-run.exe --restore-power`) or at the next start.

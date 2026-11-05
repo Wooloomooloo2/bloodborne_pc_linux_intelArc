@@ -29,6 +29,103 @@ A full play-through has not been verified. Tested thoroughly: AMD Radeon RX 7800
 Mesa/RADV, and Windows 11), the Steam Deck; on Windows also two laptops with NVIDIA GTX 1050 and
 GeForce 930MX; other NVIDIA and Intel GPUs by players.
 
+## This fork: Bloodborne on Windows with Intel Arc
+
+This fork ([Wooloomooloo2/bloodborne_pc_linux_intelArc](https://github.com/Wooloomooloo2/bloodborne_pc_linux_intelArc))
+makes bbport start, and run as fast as possible, on **Windows 11 with an integrated Intel Arc
+GPU**, without leaning on upscaling. Development is Windows-only from here on.
+
+Test machine: a laptop with an **Arc B390** (Panther Lake, Xe3, integrated), Core Ultra X7 358H,
+30 GiB shared memory, 2880x1920 panel, Windows 11 with Intel's driver. Every measurement is in
+[docs/INTEL_ARC_PLAN.md](docs/INTEL_ARC_PLAN.md).
+
+### Fixes needed to make it start
+
+Upstream 0.7 did not get from the launcher to a playable level on this laptop. Five bugs, all fixed:
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `STOP: the GPU driver cannot use the game's memory in place` | the port only took host-visible memory types that are *not* device-local; an integrated Intel GPU exposes only device-local ones | `gpu/shim/bbport_guest_memory_chunks.cpp`: device-local host-visible types are the fallback (other GPUs unchanged) |
+| Black screen; the main thread at 97 % in `NtQuerySystemInformation` | MinGW's `gettimeofday` queries the time zone on every call, and the game calls it thousands of times while it loads | `src/runtime_time.c`: `GetSystemTimePreciseAsFileTime`, the time zone read once |
+| The game's heap corrupted seconds after the title (5 of 5 runs) | end-of-pipe labels written by the GPU (Intel has no `VK_AMD_buffer_marker`) corrupt guest memory on Intel's Windows driver | `gpu/render/raster_signals.cpp`: on Intel under Windows a CPU thread writes them after the GPU finishes (`BB_GPU_LABELS=1` restores GPU writes) |
+| Rare `STOP: GPU library assertion failed` while a level loads (~1 in 25) | a missing CB/CMASK/DB extent hint was fatal | `gpu/cp/cp_graphics.cpp`: logged, and the extent taken from the registers |
+| Black screen with damaged game files | `pkg_extract` built with MinGW used the 32-bit `fseeko`, so every file past 2 GB of the package was read from the wrong offset | in the extractor (the [macOS port](https://github.com/Wooloomooloo2/bloodborne_mac_port)'s `tools/pkg_extract`): `_wfopen` and `_fseeki64` / `_ftelli64`; check that every `.dcx` starts with a DCX header |
+
+Source builds also needed weak definitions of the FSR `ffxVk*` callbacks.
+
+### Changes for performance
+
+- **Output resolution cap on integrated GPUs.** With `output_res=auto`, an integrated GPU now
+  gets at most about 2.5 MP in the monitor's shape (2880x1920 → 1920x1280; `run.py`).
+  `BB_IGPU_OUTPUT_CAP=0`, or an explicit `output_res`, keeps the full panel. This alone takes the
+  launcher defaults from 24 to 46 FPS.
+- **Upscaler off.** Without the FSR 4 assets, FSR 4 silently falls back to FSR 3.1 Native AA,
+  the most expensive setting. At 1920x1280 the game runs faster with no upscaler (57 vs 46.5 FPS).
+- **Best performance power mode.** The CPU and iGPU share one package power limit, and Windows'
+  *Best performance* overlay gives +12 %. The new launcher option *Best performance power mode
+  while playing* (off by default) switches it on for the game and puts the previous mode back
+  when the game ends. That includes the launcher's Stop (`bbport-run.exe --restore-power`) and,
+  after a crash, the next start.
+
+### Results
+
+Iosefka's Clinic, standing, 45 s windows after a 25 s warm-up:
+
+| Configuration | FPS | p99 |
+|---|---|---|
+| out-of-the-box defaults: 2880x1920, FSR 3.1 Native AA | 23.9 | 46 ms |
+| 1920x1280, FSR 3.1 Native AA | 46.5 | 33 ms |
+| **1920x1280 native, no upscaler** | **57.1-57.6** | 26-30 ms |
+| **same, Best performance power mode** | **63.3-64.5** | 24 ms |
+
+A 10-minute soak in the last configuration averaged 63.3 FPS, with p99 25.6 ms, no frame over
+50 ms and no faults.
+
+Recommended settings: upscaler off, `output_res=auto`, *Best performance power mode while
+playing* on. For more headroom, the game's own effects cost: dynamic light shadows +10 % when
+off, motion blur +3.5 %, depth of field +2 %. SSAO, bloom and chromatic aberration cost nothing
+measurable.
+
+### Measured and found not to help
+
+- **No change (within ~1 %):**
+  - precise math off (`BB_SPIRV_PRECISE=none`) and robustness off (`BB_ROBUSTNESS=0`);
+  - `BB_GARLIC_VRAM=1`, `BB_FRAMES_AHEAD=2`, `BB_ASYNC_SUBMIT=0`, `BB_COPY_SHADER_NATIVE=0`;
+  - timeline poll intervals and Immediate present;
+  - the CPU spin and helper-thread switches (all five together +1.8 %).
+- **Worse:**
+  - `BB_VERTEX_READ_COPY=1`: 34 FPS (-40 %), because the CPU's copies take the shared power
+    budget;
+  - `BB_OCCLUSION_QUERIES=0`: 52.7 FPS;
+  - exclusive full screen: 50 FPS.
+- **Where the frame goes** (1920x1280 native):
+  - about 15.7 ms of GPU work a frame over about 1,240 draws, 1.4 ms of it idle;
+  - the heaviest items are `ps e55e45eb` (1.32 ms), the G-buffer `vs 9da6aacb` (1.22 ms, 91
+    draws), the copy shader (0.53 ms), and 145 tiny draws to 64x64 / 32x32 targets at about
+    7.5 µs each (1.10 ms), which is mostly per-draw overhead;
+  - the game uses about 5.6 CPU cores.
+
+  The next gains need shader or draw-batching work, not switches.
+
+### Still open
+
+- The New Game opening movie crashed once in two tries (`Mutex is not initialized` in
+  `Mv_AudioPlayThread`); relaunching gets past it.
+- Saves copied from an older install were not picked up (no *Continue* on the title screen).
+- 2 MiB pages for the game's memory need the *Lock pages in memory* privilege; not tried yet.
+- Next targets: the 145 small draws, `ps e55e45eb`, per-draw overhead.
+
+### Building on Windows
+
+1. **Native build.** Use MSYS2 CLANG64 with CMake and Ninja. MSYS2 does not package
+   [xbyak](https://github.com/herumi/xbyak): clone it and pass `-DCMAKE_CXX_FLAGS=-I<path>/xbyak`.
+   Apply `gpu/patches/fsr-vulkan` first, as `build.sh` does.
+2. **Runner.** Freeze `bbport-run.exe` (`launcher/bbport_launcher_win.py` + `run.py`) with Windows
+   Python 3.12 and PyInstaller.
+3. **Launcher.** Build `Bloodborne.exe` with
+   `dotnet publish launcher/windows -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true`.
+   It embeds `launcher/settings_schema.json`.
+
 ## Highlights
 
 - **Native execution.** The eboot is converted offline into a flat memory image; PS4 libc and
