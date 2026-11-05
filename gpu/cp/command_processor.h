@@ -241,6 +241,7 @@ private:
     Step Graphics(Work& work, Level& level, const u32* packet, u32 body_words);
     Status RunConstantEngine(Work& work);
     void SetContextRegHints(const u32* body, u32 body_words);
+    static bool HintPresent(u32 word, const char* what);
     void Draw(Level& level, Op op, const u32* packet, u32 body_words);
     bool WaitRegMemGraphics(Work& work, const u32* body, bool retry);
     void CopyData(const u32* body);

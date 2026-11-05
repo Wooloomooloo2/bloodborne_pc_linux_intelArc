@@ -660,8 +660,8 @@ void CommandProcessor::SetContextRegHints(const u32* body, u32 body_words) {
     if (reg >= CbColor0Base && reg < CbColor0Base + 8 * CbColorStride &&
         (reg - CbColor0Base) % CbColorStride == 0) {
         const u32 target = (reg - CbColor0Base) / CbColorStride;
-        if (count_field == 0x0E || count_field == 0x0D || count_field == 0x0B) {
-            ASSERT_MSG(values[count_field] == NopHeader, "no extent hint after the CB setup");
+        if ((count_field == 0x0E || count_field == 0x0D || count_field == 0x0B) &&
+            HintPresent(values[count_field], "CB")) {
             last_cb_extent[target].raw = values[count_field + 1];
         } else {
             last_cb_extent[target].raw = 0;
@@ -669,17 +669,32 @@ void CommandProcessor::SetContextRegHints(const u32* body, u32 body_words) {
     } else if (reg >= CbColor0Cmask && reg < CbColor0Cmask + 8 * CbColorStride &&
                (reg - CbColor0Cmask) % CbColorStride == 0) {
         if (count_field == 0x04) {
-            ASSERT_MSG(values[count_field] == NopHeader, "no extent hint after the CMASK setup");
-            last_cb_extent[(reg - CbColor0Cmask) / CbColorStride].raw = values[count_field + 1];
+            const u32 target = (reg - CbColor0Cmask) / CbColorStride;
+            last_cb_extent[target].raw =
+                HintPresent(values[count_field], "CMASK") ? values[count_field + 1] : 0;
         }
     } else if (reg == DbZInfo) {
-        if (count_field == 8) {
-            ASSERT_MSG(values[20] == NopHeader, "no extent hint after the DB setup");
+        if (count_field == 8 && HintPresent(values[20], "DB")) {
             last_db_extent.raw = values[21];
         } else {
             last_db_extent.raw = 0;
         }
     }
+}
+
+bool CommandProcessor::HintPresent(u32 word, const char* what) {
+    // A missing extent hint stopped the game (STOP, an assertion) while a level loaded on an Arc
+    // B390 under Windows (2026-11-05, once in ~25 runs): the extent is then unknown (0, as for a
+    // setup without a hint) and the surface is sized from its registers.
+    if (word == NopHeader) {
+        return true;
+    }
+    static std::atomic<u32> said{0};
+    if (said.fetch_add(1, std::memory_order_relaxed) < 8) {
+        std::printf("PM4: no extent hint after the %s setup (word %#x): extent from the registers\n",
+                    what, word);
+    }
+    return false;
 }
 
 void CommandProcessor::Draw(Level& level, Op op, const u32* packet, u32 body_words) {

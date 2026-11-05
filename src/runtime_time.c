@@ -7,8 +7,43 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/time.h>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 typedef struct { int64_t seconds, microseconds; } GuestTimeval;
 typedef struct { int32_t minuteswest, dsttime; } GuestTimezone;
+#ifdef _WIN32
+/* MinGW's gettimeofday asks Windows for the time zone (GetTimeZoneInformation, a
+   NtQuerySystemInformation call) whenever it is given a timezone, and the game calls
+   gettimeofday thousands of times while it loads: on an Arc B390 laptop 97 % of the main
+   thread's time went there and the first load never finished (black screen). The time comes
+   from the precise system clock; the zone is read once, and only if the game asks for it. */
+static void host_time(GuestTimeval *value) {
+    FILETIME ft;
+    GetSystemTimePreciseAsFileTime(&ft);
+    const uint64_t ticks = ((uint64_t)ft.dwHighDateTime << 32 | ft.dwLowDateTime) -
+                           116444736000000000ull; /* 100 ns ticks since 1601 -> since 1970 */
+    value->seconds = (int64_t)(ticks / 10000000ull);
+    value->microseconds = (int64_t)(ticks % 10000000ull / 10ull);
+}
+static void host_zone(GuestTimezone *zone) {
+    static volatile LONG ready;
+    static GuestTimezone cached;
+    if (!ready) {
+        TIME_ZONE_INFORMATION info;
+        const DWORD kind = GetTimeZoneInformation(&info);
+        cached.minuteswest = (int32_t)info.Bias;
+        cached.dsttime = kind == TIME_ZONE_ID_DAYLIGHT;
+        InterlockedExchange(&ready, 1);
+    }
+    *zone = cached;
+}
+static ABI int guest_gettimeofday(GuestTimeval *value,GuestTimezone *zone) {
+    if (value) host_time(value);
+    if (zone) host_zone(zone);
+    return 0;
+}
+#else
 static ABI int guest_gettimeofday(GuestTimeval *value,GuestTimezone *zone) {
     struct timeval t;
     struct timezone z;
@@ -20,6 +55,7 @@ static ABI int guest_gettimeofday(GuestTimeval *value,GuestTimezone *zone) {
     if (zone) { zone->minuteswest=z.tz_minuteswest; zone->dsttime=z.tz_dsttime; }
     return 0;
 }
+#endif
 uintptr_t runtime_time_resolve(const char *name) {
     if (runtime_nid_is(name, "n88vx3C5nW8")) return (uintptr_t)guest_gettimeofday;
     return 0;

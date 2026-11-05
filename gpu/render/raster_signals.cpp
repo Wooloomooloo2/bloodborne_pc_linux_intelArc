@@ -263,6 +263,18 @@ bool Rasterizer::WriteLabelOnGpu(VAddr address, u64 value, u32 num_bytes) {
                         "(GFX8; BB_GPU_LABELS=1: by the GPU)\n");
             return false;
         }
+#ifdef _WIN32
+        // Intel on Windows (Arc B390, 2026-11-04): with portable GPU label writes the game's
+        // small-object pool was corrupted within seconds of the title screen (null free-list
+        // links in the range allocator at +0x26a9f53 / +0x26aa0bd, 5 of 5 runs); with the labels
+        // written by a CPU thread after the GPU, 60 s runs were clean (BB_FREE_CHECK=1, which also
+        // turns GPU labels off, hid it the same way). Linux on the same GPU was fine.
+        if (!env && instance.GetVendorID() == 0x8086) {
+            std::printf("GPU: end-of-pipe labels are written by a CPU thread after the GPU "
+                        "(Intel on Windows; BB_GPU_LABELS=1: by the GPU)\n");
+            return false;
+        }
+#endif
         return !env || env[0] != '0';
     }();
     if (!enabled || BbFreeCheck::Enabled() || (num_bytes != 4 && num_bytes != 8) ||
