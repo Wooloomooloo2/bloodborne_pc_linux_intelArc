@@ -183,6 +183,45 @@ def large_scene_memory(env, scene):
         setdefault(env, 'BB_DMEM_MB', '9152')
 
 
+def integrated_output_cap(env, caps):
+    """output_res=auto on an integrated GPU: a monitor above ~2.5 megapixels gets the output scaled
+    down with its shape (a multiple of 8) instead of the full panel. On an Arc B390 laptop
+    (2880x1920 panel, 2026-11-05) the full panel ran at 24 FPS with the default upscaler
+    (FSR 4 falls back to FSR 3.1 Native AA there); 1920x1280 native, no upscaler, 57 FPS.
+    BB_IGPU_OUTPUT_CAP=0: the monitor's size as before; =N: another pixel budget."""
+    budget = env.get('BB_IGPU_OUTPUT_CAP', '')
+    if budget == '0':
+        return
+    try:
+        rows = subprocess.run([str(caps), '--gpus'], stdout=subprocess.PIPE, text=True, env=env,
+                              creationflags=NO_WINDOW).stdout.splitlines()
+    except OSError:
+        return
+    wanted = env.get('BB_GPU_ID', '').strip()
+    chosen = None
+    for row in rows:
+        parts = row.split('\t')
+        if len(parts) < 5:
+            continue
+        if (wanted and (wanted == parts[0] or wanted.lower() in parts[3].lower())) or \
+                (not wanted and parts[4].strip() == '1'):
+            chosen = parts
+    if not chosen or chosen[2] != 'integrated':
+        return
+    width, _, height = env.get('BB_MONITOR_SIZE', '').partition('x')
+    if not (width.isdigit() and height.isdigit()):
+        return
+    w, h = int(width), int(height)
+    limit = int(budget) if budget.isdigit() else 1920 * 1280
+    if w * h <= limit * 1.02:
+        return
+    scale = (limit / (w * h)) ** 0.5
+    capped = f'{max(8, round(w * scale / 8) * 8)}x{max(8, round(h * scale / 8) * 8)}'
+    env['BB_MONITOR_SIZE'] = capped
+    log(f'Output: {capped} for the integrated GPU ({chosen[3]}; the monitor is {w}x{h}; '
+        f'output_res in the settings or BB_IGPU_OUTPUT_CAP=0 for the full panel)')
+
+
 def run(extra_args=(), env=None, on_line=None):
     """Prepares and runs the game; the exit code. on_line(text) gets every line of output."""
     global _log_file
@@ -278,6 +317,7 @@ def run(extra_args=(), env=None, on_line=None):
                     env['BB_MONITOR_SIZE'] = parts[1]
             if env.get('BB_MONITOR_SIZE'):
                 log(f'Output: the monitor\'s resolution, {env["BB_MONITOR_SIZE"]} (output_res=auto)')
+                integrated_output_cap(env, caps)
         # patches.py reads BB_MONITOR_SIZE from the environment: the output stayed 1920x1080 on any
         # other monitor, stretched over an ultrawide one (3440x1440, 2026-10-27).
         os.environ.update(env)

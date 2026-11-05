@@ -968,6 +968,22 @@ public partial class MainWindow : Window
         GameStatus.Text = game is not null ? "" : GameProblem() ?? T("game_ok");
     }
 
+    /// The power mode the runner switched for the game ("Best performance while playing") put back:
+    /// Stop ends the runner's process tree before its own cleanup runs. Does nothing otherwise.
+    private static void RestorePowerMode(string runner)
+    {
+        try
+        {
+            using var restore = Process.Start(new ProcessStartInfo(runner, "--restore-power")
+            {
+                WorkingDirectory = Store.PackageDir, UseShellExecute = false, CreateNoWindow = true,
+            });
+        }
+        catch (Exception)
+        {
+        }
+    }
+
     private void UpdatePlayButton()
     {
         PlayButton.Content = game is null ? T("play") : T("stop");
@@ -1017,6 +1033,7 @@ public partial class MainWindow : Window
             game?.Dispose();
             game = null;
             AddLine(string.Format(T("exited"), code));
+            RestorePowerMode(runner);
             UpdatePlayButton();
             UpdateGameStatus();
             if ((Sections.SelectedItem as ListBoxItem)?.Tag as string == "trophies")

@@ -201,9 +201,81 @@ def game_environment(s):
     return env
 
 
+BEST_PERFORMANCE_OVERLAY = 'ded574b5-45a0-4f42-8737-46345c09c238'
+
+
+def _power_overlay(guid=None):
+    """Windows' power mode (Settings > Power > Power mode) as an overlay scheme GUID string: the
+    current one when `guid` is None, else set to `guid`. None when the API is missing (before
+    Windows 10 1709) or refuses."""
+    try:
+        import ctypes
+        import uuid
+
+        class GUID(ctypes.Structure):
+            _fields_ = [('data', ctypes.c_ubyte * 16)]
+
+        powrprof = ctypes.WinDLL('powrprof')
+        if guid is None:
+            out = GUID()
+            if powrprof.PowerGetActualOverlayScheme(ctypes.byref(out)) != 0:
+                return None
+            return str(uuid.UUID(bytes_le=bytes(out.data)))
+        value = GUID()
+        value.data[:] = uuid.UUID(guid).bytes_le
+        return guid if powrprof.PowerSetActiveOverlayScheme(value) == 0 else None
+    except (OSError, AttributeError, ValueError):
+        return None
+
+
+def _power_marker():
+    return CONFIG_DIR / 'power_mode_restore.txt'
+
+
+def restore_power_mode():
+    """Puts back the power mode a game run switched (its marker file): after the run, after the
+    launcher's Stop (which ends the runner without its cleanup), or at the next start."""
+    marker = _power_marker()
+    try:
+        previous = marker.read_text(encoding='utf-8').strip()
+    except OSError:
+        return False
+    if _power_overlay() == BEST_PERFORMANCE_OVERLAY:
+        _power_overlay(previous)
+    try:
+        marker.unlink()
+    except OSError:
+        pass
+    print('Power mode: restored', flush=True)
+    return True
+
+
 def play(settings, on_line=None):
     import run
-    return run.run(env=game_environment(settings), on_line=on_line)
+    env = game_environment(settings)
+    if os.name == 'nt':
+        restore_power_mode()  # a run that was stopped without its cleanup
+    # Intel Arc B390 laptop (2026-11-05): the game is limited by the package power the CPU and
+    # the integrated GPU share; Windows' "Best performance" mode gave +12 % (57 -> 64 FPS at
+    # 1920x1280, p99 29 -> 24 ms). Opt-in (the launcher's switch, BB_POWER_MODE=best): it is
+    # Windows' own setting, put back as it was when the game ends.
+    wanted = settings.get('power_mode_best') in (True, '1', 1) or env.get('BB_POWER_MODE') == 'best'
+    previous = _power_overlay() if wanted and os.name == 'nt' else None
+    switched = False
+    if previous is not None and previous != BEST_PERFORMANCE_OVERLAY:
+        try:
+            CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+            _power_marker().write_text(previous, encoding='utf-8')
+            switched = _power_overlay(BEST_PERFORMANCE_OVERLAY) is not None
+        except OSError:
+            switched = False
+    if switched:
+        print(f'Power mode: Best performance while the game runs (was {previous})', flush=True)
+    try:
+        return run.run(env=env, on_line=on_line)
+    finally:
+        if switched:
+            restore_power_mode()
 
 
 def main_window():
@@ -404,6 +476,10 @@ def main():
         os.environ.setdefault('BB_DATA_DIR', str(DATA_DIR))
         import build_assets_win
         return build_assets_win.main(sys.argv[2:])
+    if '--restore-power' in sys.argv[1:]:
+        # Bloodborne.exe after the game ends (its Stop ends the runner without its cleanup).
+        restore_power_mode()
+        return 0
     if '--play' in sys.argv[1:]:
         # Run by the WPF launcher (bbport-run.exe --play, a console build): its log reads stdout.
         if sys.stdout:

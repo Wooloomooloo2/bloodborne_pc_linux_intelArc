@@ -312,6 +312,34 @@
      }
     },
     {
+     "key": "power_mode_best",
+     "type": "bool",
+     "store": "settings",
+     "default": false,
+     "platforms": ["windows"],
+     "title": {
+      "ru": "Режим питания «Макс. производительность» во время игры",
+      "en": "\"Best performance\" power mode while playing",
+      "pt_BR": "Modo de energia \"Melhor desempenho\" durante o jogo",
+      "zh_CN": "游戏时使用“最佳性能”电源模式",
+      "fr_FR": "Mode d'alimentation « Performances optimales » pendant le jeu"
+     },
+     "description": {
+      "ru": "Windows переключается в «Максимальная производительность» на время игры и возвращается обратно после. На ноутбуках со встроенной графикой (Intel Arc) процессор и видеокарта делят один лимит мощности: здесь +12 % FPS.",
+      "en": "Windows switches to Best performance while the game runs and back afterwards. On laptops with integrated graphics (Intel Arc) the CPU and GPU share one power limit: +12 % FPS measured.",
+      "pt_BR": "O Windows muda para Melhor desempenho enquanto o jogo roda e volta depois. Em notebooks com gráficos integrados (Intel Arc) CPU e GPU dividem um limite de energia: +12 % de FPS medidos.",
+      "zh_CN": "游戏运行期间 Windows 切换到“最佳性能”，结束后恢复。在集成显卡（Intel Arc）笔记本上 CPU 与 GPU 共享功耗上限：实测 FPS +12%。",
+      "fr_FR": "Windows passe en Performances optimales pendant le jeu puis revient au mode précédent. Sur les portables à graphique intégré (Intel Arc), CPU et GPU partagent une limite de puissance : +12 % d'images/s mesurés."
+     },
+     "group": {
+      "ru": "Окно",
+      "en": "Window",
+      "pt_BR": "Janela",
+      "zh_CN": "窗口",
+      "fr_FR": "Fenêtre"
+     }
+    },
+    {
      "key": "present_mode",
      "type": "choice",
      "store": "settings",
