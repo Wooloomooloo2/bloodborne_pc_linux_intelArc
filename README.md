@@ -67,6 +67,18 @@ Source builds also needed weak definitions of the FSR `ffxVk*` callbacks.
   when the game ends. That includes the launcher's Stop (`bbport-run.exe --restore-power`) and,
   after a crash, the next start.
 
+  It also keeps the game out of a slow state. With Windows' *Balanced* mode the game
+  settles, at random at start, into either 60+ FPS or about 40 FPS. In the slow state Windows
+  holds the CPU at low clocks (P-cores at ~45 % of their base performance instead of ~67 %), so
+  the game's threads take longer per frame and the GPU idles ~5 ms a frame waiting for them. That
+  makes the CPU look less busy, so the clocks stay low. It happened in a window and in full screen
+  (2026-11-07). *Best performance* avoided it in 4 of 6 runs; the other 2 were still slow.
+- **Direct memory sized to the scene.** On Windows the game's memory is committed in full at
+  start. Every scene above 1080p used to ask for 9152 MiB (sized for 4K), 10.7 GB of commit in
+  all, and the start failed (`cannot create ... of guest memory`) with a browser open on a 32 GB
+  laptop. It now grows with the scene, as the game's heaps do: 1920x1280 needs 5312 MiB (3.8 GB
+  less), 4K still 9152 (`run.py`).
+
 ### Results
 
 Iosefka's Clinic, standing, 45 s windows after a 25 s warm-up:
@@ -96,8 +108,10 @@ measurable.
 - **Worse:**
   - `BB_VERTEX_READ_COPY=1`: 34 FPS (-40 %), because the CPU's copies take the shared power
     budget;
-  - `BB_OCCLUSION_QUERIES=0`: 52.7 FPS;
-  - exclusive full screen: 50 FPS.
+  - `BB_OCCLUSION_QUERIES=0`: 52.7 FPS.
+- **Full screen** (borderless, a 2880x1920 swapchain at 120 Hz): 57.5-57.9 FPS against 62.3-63.0
+  in a window, both with *Best performance*. An earlier "50 FPS in full screen" was a windowed
+  run in the slow state. Immediate present in full screen fell into the slow state (36-38 FPS).
 - **Where the frame goes** (1920x1280 native):
   - about 15.7 ms of GPU work a frame over about 1,240 draws, 1.4 ms of it idle;
   - the heaviest items are `ps e55e45eb` (1.32 ms), the G-buffer `vs 9da6aacb` (1.22 ms, 91
@@ -113,6 +127,11 @@ measurable.
   `Mv_AudioPlayThread`); relaunching gets past it.
 - Saves copied from an older install were not picked up (no *Continue* on the title screen).
 - 2 MiB pages for the game's memory need the *Lock pages in memory* privilege; not tried yet.
+- The slow state described above: *Best performance* makes it rare, but it still happens.
+- About half of the game threads' CPU time is in the Windows kernel (GXWorker ~45 %), and the
+  runtime's PS4 mutexes and condition variables are built on MinGW's winpthreads. Faster Windows
+  primitives there are the next CPU-side lead (not measured yet).
+- A rare stop while a level loads: `no prepareFlip packet` (`gnm_driver.cpp:255`), once.
 - Next targets: the 145 small draws, `ps e55e45eb`, per-draw overhead.
 
 ### Building on Windows

@@ -568,7 +568,8 @@ No change (within ~1 %): `BB_GARLIC_VRAM=1`, `BB_SPIRV_PRECISE=none`, `BB_ROBUST
 `BB_COPY_SHADER_NATIVE=0`, Immediate present; spin/worker switches alone (`BB_GPU_SPIN_US=0`,
 `BB_PREP_WORKERS=0`, `BB_VK_RECORD_THREADS=1`, `BB_TEXTURE_HELPER=0`, `BB_PIPE_SPIN_US=0`)
 nothing, all five together +1.8 %. Worse: `BB_VERTEX_READ_COPY=1` 34 FPS (-40 %: the CPU's copies
-take the package's power), `BB_OCCLUSION_QUERIES=0` 52.7, fullscreen 50.0.
+take the package's power), `BB_OCCLUSION_QUERIES=0` 52.7 (a "fullscreen 50.0" run here was
+windowed, `BB_FULLSCREEN=0` in its log: the launcher takes it from its settings; see 2026-11-07).
 
 The game uses ~5.6 cores at 57 FPS (2.9 user, 2.6 kernel: thread wakes and driver calls spread
 over the port's recording threads and the game's GX workers; no page protection calls). The
@@ -586,3 +587,31 @@ The game's own effects, each off alone (57.0 with all on): dynamic light shadows
 - Launcher: *Best performance power mode while playing* (Windows, off by default): the runner
   switches Windows' power mode and puts the previous one back when the game ends, after the
   launcher's Stop (`bbport-run.exe --restore-power`) or at the next start.
+
+## 2026-11-07: the 40 FPS state, full screen, direct memory
+
+Same bench (Iosefka's Clinic, standing, 1920x1280 native), `BB_DMEM_MB=5056` (see below).
+
+- **Two states.** Runs settle, at random, at 60-63 FPS or at 39-41 FPS, in a window and in full
+  screen. Slow runs: the GPU idle ~5 ms a frame (`BB_TIMELINE`), the guest never waits for the
+  previous frame, ~57 Vulkan submissions a frame instead of ~23 (the idle flush in
+  `SubmitForSignalsNow` fires 26 times a frame instead of 9), the same CPU use per thread at
+  two thirds of the frames, and the CPU clocked down: `% Processor Performance` on a P-core 43-44
+  against 66-69, E-core 55-62 against 94-96. Not core placement (affinity to P+E cores or P
+  cores only: still slow). `BB_HONEST_IDLE_FLUSH=0` gave 57 FPS in 2 of 3 full-screen runs but
+  not the third, and 1 of 6 runs without it was fast: it is not the cause, and was left on.
+  *Best performance* (the launcher option): fast in 4 of 6 runs (both slow ones in full screen,
+  one with Immediate present).
+- **Full screen** with *Best performance*: 57.9 / 57.5 FPS against 63.0 / 62.3 in a window.
+  Immediate present in full screen: slow state (35.7, 37.8). The earlier "fullscreen 50.0" run
+  was windowed.
+- **Commit.** The port commits the whole guest pool at start (`bb_section_create`, `SEC_COMMIT`).
+  With 9152 MiB of direct memory (every scene above 1080p) that is 10.7 GB, and starts failed
+  with ~8 GB free (a browser and editors open on this 32 GB laptop). The heaps at 1920x1280
+  grow by 224 MiB only: `run.py` now scales direct memory with the scene as `patches.py` scales
+  the heaps (1920x1280: 5312 MiB; 2560x1440: 6128; 4K: 9152). Committing lazily (`SEC_RESERVE`)
+  would remove the rest of the problem.
+- Kernel time: about half of the game threads' CPU (GXWorker ~45 % of a core each in the
+  kernel); the runtime's guest mutexes and condition variables are winpthreads. Not measured
+  further (the session's memory monitor stopped the runs).
+- Once: `no prepareFlip packet` (`gnm_driver.cpp:255`) while a level loaded.

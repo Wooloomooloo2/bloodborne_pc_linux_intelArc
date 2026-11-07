@@ -177,10 +177,17 @@ def stop_bbsc_local_server():
 
 
 def large_scene_memory(env, scene):
-    """More direct memory only for the game's larger heaps (a scene above 1920x1080, see run.sh)."""
+    """More direct memory only for the game's larger heaps (a scene above 1920x1080, see run.sh),
+    as much more as they grow: patches.py grows them by (pixels / 1080p - 1) / 3 of the 4K patch's
+    increase, so direct memory grows by that share of 4K's 9152 - 5056 MiB. On Windows all of it
+    is committed at start: 9152 MiB for a 1920x1280 scene (heaps +224 MiB) needed 10.7 GB of free
+    commit, and the start failed with a browser open on a 32 GB laptop (2026-11-07)."""
     width, _, height = scene.partition('x')
-    if width.isdigit() and height.isdigit() and int(width) * int(height) > 1920 * 1080:
-        setdefault(env, 'BB_DMEM_MB', '9152')
+    if not (width.isdigit() and height.isdigit()):
+        return
+    share = min(1.0, max(0.0, (int(width) * int(height) / (1920 * 1080) - 1) / 3))
+    if share > 0:
+        setdefault(env, 'BB_DMEM_MB', str(5056 + -(-int(4096 * share) // 16) * 16))
 
 
 def integrated_output_cap(env, caps):
